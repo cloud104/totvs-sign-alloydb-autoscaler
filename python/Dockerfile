@@ -14,14 +14,14 @@ WORKDIR /app
 
 # Copiar o script Python, arquivo de chave da conta de serviço e requirements.txt para o contêiner
 COPY alloydb-autoscaler.py .
-COPY tfc9924-service-9-374429.json /app/tfc9924-service-9-374429.json
+COPY key.json /app/key.json
 COPY requirements.txt .
 
 # Instalar dependências do Python
 RUN pip install -r requirements.txt
 
 # Definir variáveis de ambiente
-ENV GOOGLE_APPLICATION_CREDENTIALS="/app/tfc9924-service-9-374429.json"
+ENV GOOGLE_APPLICATION_CREDENTIALS="/app/key.json"
 
 # Comando para executar o script Python
 CMD ["python", "alloydb-autoscaler.py"]
