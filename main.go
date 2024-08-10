@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"runtime"
 	"strconv"
@@ -12,7 +13,6 @@ import (
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	"github.com/common-nighthawk/go-figure"
 	"github.com/joho/godotenv"
-	"github.com/sirupsen/logrus"
 	"google.golang.org/api/alloydb/v1"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
@@ -34,12 +34,10 @@ type Config struct {
 	Region                       string
 	MinReplicas                  int
 	MaxReplicas                  int
-	LogLevel                     string
 }
 
 var (
 	cfg Config
-	log = logrus.New()
 )
 
 func init() {
@@ -48,16 +46,14 @@ func init() {
 	}
 
 	// Configurar o formato de log para usar o padrão brasileiro de data
-	log.SetFormatter(&logrus.TextFormatter{
-		TimestampFormat: "02/01/2006 15:04:05",
-		FullTimestamp:   true,
-	})
+	log.SetFlags(0)
+	log.SetOutput(new(LogWriter))
+}
 
-	level, err := logrus.ParseLevel(cfg.LogLevel)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.SetLevel(level)
+type LogWriter struct{}
+
+func (writer LogWriter) Write(bytes []byte) (int, error) {
+	return fmt.Print(time.Now().Format("02/01/2006 15:04:05") + " " + string(bytes))
 }
 
 func loadConfig() error {
@@ -74,7 +70,6 @@ func loadConfig() error {
 		ClusterName:                  os.Getenv("CLUSTER_NAME"),
 		InstanceName:                 os.Getenv("INSTANCE_NAME"),
 		Region:                       os.Getenv("REGION"),
-		LogLevel:                     os.Getenv("LOG_LEVEL"),
 	}
 
 	cfg.CPUThreshold, err = parseFloatConfig("CPU_THRESHOLD")
@@ -144,7 +139,7 @@ func main() {
 	Banner := figure.NewFigure("TOTVS APPS", "small", true)
 	Banner.Print()
 	fmt.Println()
-	log.Infof("%s (%s): Iniciando o aplicativo...", AppName, runtime.Version())
+	fmt.Printf("%s (%s): Iniciando o aplicativo...\n\n", AppName, runtime.Version())
 
 	if err := loadConfig(); err != nil {
 		log.Fatalf("Erro ao carregar configuração: %v", err)
@@ -162,24 +157,24 @@ func main() {
 
 	for {
 		if err := checkMetrics(ctx, client, &scaleUpCount, &scaleDownCount); err != nil {
-			log.Errorf("Erro ao verificar métricas: %v", err)
+			log.Println(err)
 		}
 
 		if time.Since(evaluationStart) >= time.Duration(cfg.EvaluationPeriod)*time.Second {
 			if scaleUpCount > scaleDownCount && scaleUpCount > 0 {
 				if err := scaleUp(ctx); err != nil {
-					log.Errorf("Erro ao escalar: %v", err)
+					log.Println(err)
 				} else {
-					log.Infof("Operação de escala de réplicas concluída com sucesso.")
+					log.Println("INFO: Operação de escala de réplicas concluída com sucesso.")
 				}
 			} else if scaleDownCount > scaleUpCount && scaleDownCount > 0 {
 				if err := scaleDown(ctx); err != nil {
-					log.Errorf("Erro ao reduzir réplicas: %v", err)
+					log.Println(err)
 				} else {
-					log.Infof("Operação de redução de réplicas concluída com sucesso.")
+					log.Println("INFO: Operação de redução de réplicas concluída com sucesso.")
 				}
 			} else {
-				log.Infof("Nenhuma ação de escala necessária.")
+				log.Println("INFO: Nenhuma ação de escala necessária.")
 			}
 
 			scaleUpCount = 0
@@ -193,8 +188,9 @@ func main() {
 
 func logTimer(duration int) {
 	nextCheck := time.Now().Add(time.Duration(duration) * time.Second)
-	log.Debugf("Próxima checagem: %s", nextCheck.Format("15:04:05"))
+	log.Printf("INFO: Próxima checagem: %s", nextCheck.Format("15:04:05"))
 	time.Sleep(time.Duration(duration) * time.Second)
+	//log.Println("INFO: Iniciando nova checagem")
 	fmt.Println() // Adiciona uma linha em branco
 }
 
@@ -220,7 +216,7 @@ func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 
 	cpuUsagePercent := cpuUsage * 100
 
-	log.Debugf("Cluster: %s, Uso de CPU: %.2f%%, Uso de Memória: %.2f%%",
+	log.Printf("INFO: Cluster: %s, Uso de CPU: %.2f%%, Uso de Memória: %.2f%%",
 		cfg.ClusterName, cpuUsagePercent, memoryUsagePercent)
 
 	currentCount, err := getReadPoolNodeCount(ctx)
@@ -230,15 +226,15 @@ func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 
 	if memoryUsagePercent > cfg.MemoryThreshold || cpuUsagePercent > cfg.CPUThreshold {
 		if currentCount < cfg.MaxReplicas {
-			log.Infof("Recursos insuficientes detectados, considerando escalar réplicas.")
+			log.Println("INFO: \033[31mRecursos insuficientes detectados, considerando escalar réplicas.\033[0m")
 			*scaleUpCount++
 			*scaleDownCount = 0
 		} else {
-			log.Debugf("Recursos insuficientes detectados, mas o número máximo de réplicas já foi atingido.")
+			log.Println("INFO: Recursos insuficientes detectados, mas o número máximo de réplicas já foi atingido.")
 		}
 	} else if memoryUsagePercent < cfg.MemoryThreshold && cpuUsagePercent < cfg.CPUThreshold {
 		if currentCount > cfg.MinReplicas {
-			log.Infof("Recursos em excesso detectados, considerando reduzir o número de réplicas.")
+			log.Println("INFO: \033[34mRecursos em excesso detectados, considerando reduzir o número de réplicas.\033[0m")
 			*scaleDownCount++
 			*scaleUpCount = 0
 		} else {
@@ -326,7 +322,7 @@ func getTotalMemory(ctx context.Context) (float64, error) {
 }
 
 func logNormalResources(count int) {
-	log.Infof("Recursos do AlloyDB dentro da normalidade com %d réplicas.", count)
+	log.Printf("INFO: \033[32mRecursos do AlloyDB dentro da normalidade com %d réplicas.\033[0m", count)
 }
 
 func scaleUp(ctx context.Context) error {
@@ -341,7 +337,7 @@ func scaleUp(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		log.Infof("Iniciando operação de escala para %d réplicas.", newCount)
+		log.Printf("INFO: Iniciando operação de escala para %d réplicas.", newCount)
 
 		err = waitForOperation(ctx, operation)
 		if err != nil {
@@ -349,9 +345,9 @@ func scaleUp(ctx context.Context) error {
 		}
 
 		fmt.Println() // Adiciona uma quebra de linha após a conclusão da operação
-		log.Infof("Escalado com sucesso para %d réplicas.", newCount)
+		log.Printf("INFO: Escalado com sucesso para %d réplicas.", newCount)
 	} else {
-		log.Infof("O número máximo de réplicas foi atingido. Não serão criadas novas réplicas.")
+		log.Println("INFO: O número máximo de réplicas foi atingido. Não serão criadas novas réplicas.")
 	}
 	return nil
 }
@@ -368,7 +364,7 @@ func scaleDown(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		log.Infof("Iniciando operação de redução para %d réplicas.", newCount)
+		log.Printf("INFO: Iniciando operação de redução para %d réplicas.", newCount)
 
 		err = waitForOperation(ctx, operation)
 		if err != nil {
@@ -376,9 +372,9 @@ func scaleDown(ctx context.Context) error {
 		}
 
 		fmt.Println() // Adiciona uma quebra de linha após a conclusão da operação
-		log.Infof("Reduzido com sucesso para %d réplicas.", newCount)
+		log.Printf("INFO: Reduzido com sucesso para %d réplicas.", newCount)
 	} else {
-		log.Infof("O número mínimo de réplicas foi atingido. Não serão removidas réplicas.")
+		log.Println("INFO: O número mínimo de réplicas foi atingido. Não serão removidas réplicas.")
 	}
 	return nil
 }
@@ -410,7 +406,7 @@ func waitForOperation(ctx context.Context, operation *alloydb.Operation) error {
 		return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
 	}
 
-	log.Infof("Operação em andamento. Aguardando...")
+	log.Println("INFO: Operação em andamento. Aguardando...")
 
 	startTime := time.Now()
 	for {
@@ -423,7 +419,7 @@ func waitForOperation(ctx context.Context, operation *alloydb.Operation) error {
 			if op.Error != nil {
 				return fmt.Errorf("operação falhou: %s", op.Error.Message)
 			}
-			log.Infof("Operação concluída. Tempo total: %v", time.Since(startTime).Round(time.Second))
+			log.Printf("INFO: Operação concluída. Tempo total: %v", time.Since(startTime).Round(time.Second))
 			return nil
 		}
 
