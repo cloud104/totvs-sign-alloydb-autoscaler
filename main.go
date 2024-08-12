@@ -194,6 +194,27 @@ func retry(attempts int, sleep time.Duration, f func() error) error {
 	return fmt.Errorf("após %d tentativas, última erro: %v", attempts, err)
 }
 
+func retryAlloyDBOperation(ctx context.Context, operation func(*alloydb.Service) error) error {
+	return retry(3, time.Second, func() error {
+		service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
+		if err != nil {
+			return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
+		}
+		return operation(service)
+	})
+}
+
+func getInstanceWithRetry(ctx context.Context) (*alloydb.Instance, error) {
+	var instance *alloydb.Instance
+	err := retryAlloyDBOperation(ctx, func(service *alloydb.Service) error {
+		instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
+		var err error
+		instance, err = service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
+		return err
+	})
+	return instance, err
+}
+
 func logTimer(duration int) {
 	nextCheck := time.Now().Add(time.Duration(duration) * time.Second)
 	log.Debugf("Próxima checagem: %s", nextCheck.Format("15:04:05"))
@@ -298,43 +319,19 @@ func queryMetric(ctx context.Context, client *monitoring.MetricClient, metricTyp
 }
 
 func getReadPoolNodeCount(ctx context.Context) (int, error) {
-	var nodeCount int
-	err := retry(3, time.Second, func() error {
-		service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
-		if err != nil {
-			return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
-		}
-
-		instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
-		instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
-		if err != nil {
-			return fmt.Errorf("erro ao obter instância: %w", err)
-		}
-
-		nodeCount = int(instance.ReadPoolConfig.NodeCount)
-		return nil
-	})
-	return nodeCount, err
+	instance, err := getInstanceWithRetry(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return int(instance.ReadPoolConfig.NodeCount), nil
 }
 
 func getTotalMemory(ctx context.Context) (float64, error) {
-	var totalMemoryGB float64
-	err := retry(3, time.Second, func() error {
-		service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
-		if err != nil {
-			return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
-		}
-
-		instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
-		instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
-		if err != nil {
-			return fmt.Errorf("erro ao obter instância: %w", err)
-		}
-
-		totalMemoryGB = float64(instance.MachineConfig.CpuCount) * 8
-		return nil
-	})
-	return totalMemoryGB, err
+	instance, err := getInstanceWithRetry(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return float64(instance.MachineConfig.CpuCount) * 8, nil
 }
 
 func logNormalResources(count int) {
@@ -381,7 +378,6 @@ func scaleDown(ctx context.Context) error {
 			return err
 		}
 		log.Infof("Iniciando operação de redução para %d réplicas.", newCount)
-
 		err = waitForOperation(ctx, operation)
 		if err != nil {
 			return fmt.Errorf("erro ao aguardar a conclusão da operação de redução: %w", err)
@@ -397,12 +393,7 @@ func scaleDown(ctx context.Context) error {
 
 func updateReplicaCount(ctx context.Context, count int) (*alloydb.Operation, error) {
 	var operation *alloydb.Operation
-	err := retry(3, time.Second, func() error {
-		service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
-		if err != nil {
-			return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
-		}
-
+	err := retryAlloyDBOperation(ctx, func(service *alloydb.Service) error {
 		instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
 		instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
 		if err != nil {
@@ -411,28 +402,16 @@ func updateReplicaCount(ctx context.Context, count int) (*alloydb.Operation, err
 
 		instance.ReadPoolConfig.NodeCount = int64(count)
 		operation, err = service.Projects.Locations.Clusters.Instances.Patch(instanceName, instance).Context(ctx).Do()
-		if err != nil {
-			return fmt.Errorf("erro ao iniciar operação de atualização de réplicas: %w", err)
-		}
-		return nil
+		return err
 	})
-
-	if err != nil {
-		return nil, err
-	}
-	return operation, nil
+	return operation, err
 }
 
 func waitForOperation(ctx context.Context, operation *alloydb.Operation) error {
-	service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
-	if err != nil {
-		return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
-	}
-
 	log.Infof("Operação em andamento. Aguardando...")
-
 	startTime := time.Now()
-	return retry(30, 10*time.Second, func() error {
+
+	return retryAlloyDBOperation(ctx, func(service *alloydb.Service) error {
 		op, err := service.Projects.Locations.Operations.Get(operation.Name).Context(ctx).Do()
 		if err != nil {
 			return fmt.Errorf("erro ao obter status da operação: %w", err)
