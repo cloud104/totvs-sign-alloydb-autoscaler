@@ -10,7 +10,6 @@ import (
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
-	"github.com/common-nighthawk/go-figure"
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/api/alloydb/v1"
@@ -19,7 +18,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Config armazena todas as configurações do aplicativo
 type Config struct {
 	GoogleApplicationCredentials string
 	MemoryMetric                 string
@@ -27,7 +25,7 @@ type Config struct {
 	CPUThreshold                 float64
 	MemoryThreshold              float64
 	CheckInterval                int
-	EvaluationPeriod             int
+	Evaluation                   int
 	GCPProject                   string
 	ClusterName                  string
 	InstanceName                 string
@@ -42,12 +40,13 @@ var (
 	log = logrus.New()
 )
 
+const AppName = "AlloyDB Autoscaler"
+
 func init() {
 	if err := loadConfig(); err != nil {
 		log.Fatal(err)
 	}
 
-	// Configurar o formato de log para usar o padrão brasileiro de data
 	log.SetFormatter(&logrus.TextFormatter{
 		TimestampFormat: "02/01/2006 15:04:05",
 		FullTimestamp:   true,
@@ -92,7 +91,7 @@ func loadConfig() error {
 		return err
 	}
 
-	cfg.EvaluationPeriod, err = parseIntConfig("EVALUATION_PERIOD")
+	cfg.Evaluation, err = parseIntConfig("EVALUATION")
 	if err != nil {
 		return err
 	}
@@ -138,17 +137,9 @@ func parseIntConfig(key string) (int, error) {
 	return parsed, nil
 }
 
-const AppName = "AlloyDB Autoscaler"
-
 func main() {
-	Banner := figure.NewFigure("TOTVS APPS", "small", true)
-	Banner.Print()
 	fmt.Println()
 	log.Infof("%s (%s): Iniciando o aplicativo...", AppName, runtime.Version())
-
-	if err := loadConfig(); err != nil {
-		log.Fatalf("Erro ao carregar configuração: %v", err)
-	}
 
 	ctx := context.Background()
 	client, err := monitoring.NewMetricClient(ctx)
@@ -165,7 +156,7 @@ func main() {
 			log.Errorf("Erro ao verificar métricas: %v", err)
 		}
 
-		if time.Since(evaluationStart) >= time.Duration(cfg.EvaluationPeriod)*time.Second {
+		if time.Since(evaluationStart) >= time.Duration(cfg.Evaluation)*time.Second {
 			if scaleUpCount > scaleDownCount && scaleUpCount > 0 {
 				if err := scaleUp(ctx); err != nil {
 					log.Errorf("Erro ao escalar: %v", err)
@@ -191,11 +182,23 @@ func main() {
 	}
 }
 
+func retry(attempts int, sleep time.Duration, f func() error) error {
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = f(); err == nil {
+			return nil
+		}
+		time.Sleep(sleep)
+		sleep *= 2
+	}
+	return fmt.Errorf("após %d tentativas, última erro: %v", attempts, err)
+}
+
 func logTimer(duration int) {
 	nextCheck := time.Now().Add(time.Duration(duration) * time.Second)
 	log.Debugf("Próxima checagem: %s", nextCheck.Format("15:04:05"))
 	time.Sleep(time.Duration(duration) * time.Second)
-	fmt.Println() // Adiciona uma linha em branco
+	fmt.Println()
 }
 
 func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpCount, scaleDownCount *int) error {
@@ -254,75 +257,84 @@ func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 }
 
 func queryMetric(ctx context.Context, client *monitoring.MetricClient, metricType string) (float64, error) {
-	now := time.Now()
-	startTime := now.Add(-5 * time.Minute)
-
-	req := &monitoringpb.ListTimeSeriesRequest{
-		Name:   fmt.Sprintf("projects/%s", cfg.GCPProject),
-		Filter: fmt.Sprintf(`metric.type = "%s" AND resource.labels.instance_id = "%s"`, metricType, cfg.InstanceName),
-		Interval: &monitoringpb.TimeInterval{
-			StartTime: timestamppb.New(startTime),
-			EndTime:   timestamppb.New(now),
-		},
-		View: monitoringpb.ListTimeSeriesRequest_FULL,
-	}
-
-	it := client.ListTimeSeries(ctx, req)
 	var lastValue float64
-	for {
-		resp, err := it.Next()
-		if err == iterator.Done {
-			break
+	err := retry(3, time.Second, func() error {
+		now := time.Now()
+		startTime := now.Add(-5 * time.Minute)
+
+		req := &monitoringpb.ListTimeSeriesRequest{
+			Name:   fmt.Sprintf("projects/%s", cfg.GCPProject),
+			Filter: fmt.Sprintf(`metric.type = "%s" AND resource.labels.instance_id = "%s"`, metricType, cfg.InstanceName),
+			Interval: &monitoringpb.TimeInterval{
+				StartTime: timestamppb.New(startTime),
+				EndTime:   timestamppb.New(now),
+			},
+			View: monitoringpb.ListTimeSeriesRequest_FULL,
 		}
-		if err != nil {
-			return 0, fmt.Errorf("erro ao iterar sobre as séries temporais: %w", err)
-		}
-		if len(resp.Points) > 0 {
-			switch v := resp.Points[0].Value.Value.(type) {
-			case *monitoringpb.TypedValue_DoubleValue:
-				lastValue = v.DoubleValue
-			case *monitoringpb.TypedValue_Int64Value:
-				lastValue = float64(v.Int64Value)
-			default:
-				return 0, fmt.Errorf("tipo de valor não suportado: %T", v)
+
+		it := client.ListTimeSeries(ctx, req)
+		for {
+			resp, err := it.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("erro ao iterar sobre as séries temporais: %w", err)
+			}
+			if len(resp.Points) > 0 {
+				switch v := resp.Points[0].Value.Value.(type) {
+				case *monitoringpb.TypedValue_DoubleValue:
+					lastValue = v.DoubleValue
+				case *monitoringpb.TypedValue_Int64Value:
+					lastValue = float64(v.Int64Value)
+				default:
+					return fmt.Errorf("tipo de valor não suportado: %T", v)
+				}
 			}
 		}
-	}
-
-	return lastValue, nil
+		return nil
+	})
+	return lastValue, err
 }
 
 func getReadPoolNodeCount(ctx context.Context) (int, error) {
-	service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
-	if err != nil {
-		return 0, fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
-	}
+	var nodeCount int
+	err := retry(3, time.Second, func() error {
+		service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
+		if err != nil {
+			return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
+		}
 
-	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
-	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
-	if err != nil {
-		return 0, fmt.Errorf("erro ao obter instância: %w", err)
-	}
+		instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
+		instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("erro ao obter instância: %w", err)
+		}
 
-	return int(instance.ReadPoolConfig.NodeCount), nil
+		nodeCount = int(instance.ReadPoolConfig.NodeCount)
+		return nil
+	})
+	return nodeCount, err
 }
 
 func getTotalMemory(ctx context.Context) (float64, error) {
-	service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
-	if err != nil {
-		return 0, fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
-	}
+	var totalMemoryGB float64
+	err := retry(3, time.Second, func() error {
+		service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
+		if err != nil {
+			return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
+		}
 
-	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
-	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
-	if err != nil {
-		return 0, fmt.Errorf("erro ao obter instância: %w", err)
-	}
+		instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
+		instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("erro ao obter instância: %w", err)
+		}
 
-	// A memória é geralmente fornecida em GB
-	totalMemoryGB := float64(instance.MachineConfig.CpuCount) * 8 // Assumindo 16GB por vCPU, ajuste conforme necessário
-
-	return totalMemoryGB, nil
+		totalMemoryGB = float64(instance.MachineConfig.CpuCount) * 8
+		return nil
+	})
+	return totalMemoryGB, err
 }
 
 func logNormalResources(count int) {
@@ -348,7 +360,7 @@ func scaleUp(ctx context.Context) error {
 			return fmt.Errorf("erro ao aguardar a conclusão da operação de escala: %w", err)
 		}
 
-		fmt.Println() // Adiciona uma quebra de linha após a conclusão da operação
+		fmt.Println()
 		log.Infof("Escalado com sucesso para %d réplicas.", newCount)
 	} else {
 		log.Infof("O número máximo de réplicas foi atingido. Não serão criadas novas réplicas.")
@@ -375,7 +387,7 @@ func scaleDown(ctx context.Context) error {
 			return fmt.Errorf("erro ao aguardar a conclusão da operação de redução: %w", err)
 		}
 
-		fmt.Println() // Adiciona uma quebra de linha após a conclusão da operação
+		fmt.Println()
 		log.Infof("Reduzido com sucesso para %d réplicas.", newCount)
 	} else {
 		log.Infof("O número mínimo de réplicas foi atingido. Não serão removidas réplicas.")
@@ -384,23 +396,30 @@ func scaleDown(ctx context.Context) error {
 }
 
 func updateReplicaCount(ctx context.Context, count int) (*alloydb.Operation, error) {
-	service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
-	if err != nil {
-		return nil, fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
-	}
+	var operation *alloydb.Operation
+	err := retry(3, time.Second, func() error {
+		service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
+		if err != nil {
+			return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
+		}
 
-	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
-	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
-	if err != nil {
-		return nil, fmt.Errorf("erro ao obter instância: %w", err)
-	}
+		instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
+		instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("erro ao obter instância: %w", err)
+		}
 
-	instance.ReadPoolConfig.NodeCount = int64(count)
-	operation, err := service.Projects.Locations.Clusters.Instances.Patch(instanceName, instance).Context(ctx).Do()
-	if err != nil {
-		return nil, fmt.Errorf("erro ao iniciar operação de atualização de réplicas: %w", err)
-	}
+		instance.ReadPoolConfig.NodeCount = int64(count)
+		operation, err = service.Projects.Locations.Clusters.Instances.Patch(instanceName, instance).Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("erro ao iniciar operação de atualização de réplicas: %w", err)
+		}
+		return nil
+	})
 
+	if err != nil {
+		return nil, err
+	}
 	return operation, nil
 }
 
@@ -413,7 +432,7 @@ func waitForOperation(ctx context.Context, operation *alloydb.Operation) error {
 	log.Infof("Operação em andamento. Aguardando...")
 
 	startTime := time.Now()
-	for {
+	return retry(30, 10*time.Second, func() error {
 		op, err := service.Projects.Locations.Operations.Get(operation.Name).Context(ctx).Do()
 		if err != nil {
 			return fmt.Errorf("erro ao obter status da operação: %w", err)
@@ -427,8 +446,7 @@ func waitForOperation(ctx context.Context, operation *alloydb.Operation) error {
 			return nil
 		}
 
-		// Imprimir um ponto a cada 10 segundos para indicar que a operação ainda está em andamento
 		fmt.Print(".")
-		time.Sleep(10 * time.Second)
-	}
+		return fmt.Errorf("operação ainda em andamento")
+	})
 }
