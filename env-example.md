@@ -14,3 +14,4 @@ CHECK_INTERVAL=30 # Verifica a cada 10 segundos
 EVALUATION=120 # Avalia numa janela de 2 minutos todas as verificações de 10 segundos para daí sim escalar ou desescalar.
 MIN_REPLICAS=1 # Minimo de replicas
 MAX_REPLICAS=2 # Máximo de replicas
+API_TIMEOUT=30 # Timeout da API da GCP em segundos
