@@ -6,13 +6,12 @@ import (
 	"os"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
+	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/log"
 	"github.com/joho/godotenv"
-	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/alloydb/v1"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
@@ -35,7 +34,7 @@ type Config struct {
 	MinReplicas                  int
 	MaxReplicas                  int
 	TimeoutSeconds               int
-	LogLevel                     log.Level
+	LogLevel                     string
 }
 
 var (
@@ -43,14 +42,11 @@ var (
 )
 
 func init() {
-	log.SetFormatter(&log.JSONFormatter{})
-	log.SetOutput(os.Stdout)
-
 	if err := loadConfig(); err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err).Msg("Falha ao carregar configuração")
 	}
 
-	log.SetLevel(cfg.LogLevel)
+	log.Initialize()
 }
 
 func loadConfig() error {
@@ -67,6 +63,7 @@ func loadConfig() error {
 		ClusterName:                  os.Getenv("CLUSTER_NAME"),
 		InstanceName:                 os.Getenv("INSTANCE_NAME"),
 		Region:                       os.Getenv("REGION"),
+		LogLevel:                     os.Getenv("LOG_LEVEL"),
 	}
 
 	cfg.CPUThreshold, err = parseFloatConfig("CPU_THRESHOLD")
@@ -117,29 +114,18 @@ func loadConfig() error {
 		return fmt.Errorf("TIMEOUT_SECONDS deve ser maior que 0, valor atual: %d", cfg.TimeoutSeconds)
 	}
 
-	logLevelStr := os.Getenv("LOG_LEVEL")
-	if logLevelStr == "" {
-		logLevelStr = "info"
-	}
-	logLevel, err := log.ParseLevel(strings.ToLower(logLevelStr))
-	if err != nil {
-		return fmt.Errorf("nível de log inválido '%s': %w", logLevelStr, err)
-	}
-	cfg.LogLevel = logLevel
-
-	log.WithFields(log.Fields{
-		"CPUThreshold":    cfg.CPUThreshold,
-		"MemoryThreshold": cfg.MemoryThreshold,
-		"CheckInterval":   cfg.CheckInterval,
-		"Evaluation":      cfg.Evaluation,
-		"MinReplicas":     cfg.MinReplicas,
-		"MaxReplicas":     cfg.MaxReplicas,
-		"TimeoutSeconds":  cfg.TimeoutSeconds,
-	}).Debug("Configuração carregada com sucesso")
+	log.Debug().
+		Float64("CPUThreshold", cfg.CPUThreshold).
+		Float64("MemoryThreshold", cfg.MemoryThreshold).
+		Int("CheckInterval", cfg.CheckInterval).
+		Int("Evaluation", cfg.Evaluation).
+		Int("MinReplicas", cfg.MinReplicas).
+		Int("MaxReplicas", cfg.MaxReplicas).
+		Int("TimeoutSeconds", cfg.TimeoutSeconds).
+		Msg("Configuração carregada com sucesso")
 
 	return nil
 }
-
 func parseFloatConfig(key string) (float64, error) {
 	value := os.Getenv(key)
 	parsed, err := strconv.ParseFloat(value, 64)
@@ -161,15 +147,15 @@ func parseIntConfig(key string) (int, error) {
 const AppName = "AlloyDB Autoscaler"
 
 func main() {
-	log.WithFields(log.Fields{
-		"appName": AppName,
-		"version": runtime.Version(),
-	}).Debug("Iniciando o aplicativo")
+	log.Info().
+		Str("appName", AppName).
+		Str("version", runtime.Version()).
+		Msg("Iniciando o aplicativo")
 
 	ctx := context.Background()
 	client, err := monitoring.NewMetricClient(ctx)
 	if err != nil {
-		log.WithError(err).Fatal("Falha ao criar cliente de métricas")
+		log.Fatal().Err(err).Msg("Falha ao criar cliente de métricas")
 	}
 	defer client.Close()
 
@@ -183,9 +169,9 @@ func main() {
 
 			if err := checkMetrics(ctx, client, &scaleUpCount, &scaleDownCount); err != nil {
 				if ctx.Err() == context.DeadlineExceeded {
-					log.WithField("timeout", cfg.TimeoutSeconds).Error("Timeout ao verificar métricas")
+					log.ErrorMessage("Timeout ao verificar métricas").Int("timeout", cfg.TimeoutSeconds).Send()
 				} else {
-					log.WithError(err).Error("Erro ao verificar métricas")
+					log.Error(err).Msg("Erro ao verificar métricas")
 				}
 			}
 		}()
@@ -193,18 +179,18 @@ func main() {
 		if time.Since(evaluationStart) >= time.Duration(cfg.Evaluation)*time.Second {
 			if scaleUpCount > scaleDownCount && scaleUpCount > 0 {
 				if err := scaleUp(context.Background()); err != nil {
-					log.WithError(err).Error("Falha ao escalar")
+					log.Error(err).Msg("Falha ao escalar")
 				} else {
-					log.Info("Operação de escala de réplicas concluída com sucesso")
+					log.Info().Msg("Operação de escala de réplicas concluída com sucesso")
 				}
 			} else if scaleDownCount > scaleUpCount && scaleDownCount > 0 {
 				if err := scaleDown(context.Background()); err != nil {
-					log.WithError(err).Error("Falha ao desescalar")
+					log.Error(err).Msg("Falha ao desescalar")
 				} else {
-					log.Info("Operação de redução de réplicas concluída com sucesso")
+					log.Info().Msg("Operação de redução de réplicas concluída com sucesso")
 				}
 			} else {
-				log.Info("Nenhuma ação de escala necessária")
+				log.Info().Msg("Nenhuma ação de escala necessária")
 			}
 
 			scaleUpCount = 0
@@ -215,9 +201,10 @@ func main() {
 		logTimer(cfg.CheckInterval)
 	}
 }
+
 func logTimer(duration int) {
 	nextCheck := time.Now().Add(time.Duration(duration) * time.Second)
-	log.Debugf("Proxima checagem %s", nextCheck.Format("15:04:05"))
+	log.Debug().Str("nextCheck", nextCheck.Format("15:04:05")).Msg("Próxima checagem")
 	time.Sleep(time.Duration(duration) * time.Second)
 }
 
@@ -243,11 +230,11 @@ func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 
 	cpuUsagePercent := cpuUsage * 100
 
-	log.WithFields(log.Fields{
-		"cluster":     cfg.ClusterName,
-		"cpuUsage":    fmt.Sprintf("%.2f%%", cpuUsagePercent),
-		"memoryUsage": fmt.Sprintf("%.2f%%", memoryUsagePercent),
-	}).Debug("Métricas atuais")
+	log.Debug().
+		Str("cluster", cfg.ClusterName).
+		Float64("cpuUsage", cpuUsagePercent).
+		Float64("memoryUsage", memoryUsagePercent).
+		Msg("Métricas atuais")
 
 	currentCount, err := getReadPoolNodeCount(ctx)
 	if err != nil {
@@ -256,23 +243,25 @@ func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 
 	if memoryUsagePercent > cfg.MemoryThreshold || cpuUsagePercent > cfg.CPUThreshold {
 		if currentCount < cfg.MaxReplicas {
-			log.WithFields(log.Fields{
-				"cpuUsage":     cpuUsagePercent,
-				"memoryUsage":  memoryUsagePercent,
-				"currentCount": currentCount,
-			}).Info("Recursos insuficientes detectados, considerando escalar réplicas")
+			log.Info().
+				Float64("cpuUsage", cpuUsagePercent).
+				Float64("memoryUsage", memoryUsagePercent).
+				Int("currentCount", currentCount).
+				Msg("Recursos insuficientes detectados, considerando escalar réplicas")
 			*scaleUpCount++
 			*scaleDownCount = 0
 		} else {
-			log.WithField("currentCount", currentCount).Warn("Recursos insuficientes detectados, mas o número máximo de réplicas já foi atingido")
+			log.Warn().
+				Int("currentCount", currentCount).
+				Msg("Recursos insuficientes detectados, mas o número máximo de réplicas já foi atingido")
 		}
 	} else if memoryUsagePercent < cfg.MemoryThreshold && cpuUsagePercent < cfg.CPUThreshold {
 		if currentCount > cfg.MinReplicas {
-			log.WithFields(log.Fields{
-				"cpuUsage":     cpuUsagePercent,
-				"memoryUsage":  memoryUsagePercent,
-				"currentCount": currentCount,
-			}).Info("Recursos em excesso detectados, considerando reduzir o número de réplicas")
+			log.Info().
+				Float64("cpuUsage", cpuUsagePercent).
+				Float64("memoryUsage", memoryUsagePercent).
+				Int("currentCount", currentCount).
+				Msg("Recursos em excesso detectados, considerando reduzir o número de réplicas")
 			*scaleDownCount++
 			*scaleUpCount = 0
 		} else {
@@ -286,7 +275,6 @@ func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 
 	return nil
 }
-
 func queryMetric(ctx context.Context, client *monitoring.MetricClient, metricType string) (float64, error) {
 	now := time.Now()
 	startTime := now.Add(-5 * time.Minute)
@@ -368,7 +356,7 @@ func getTotalMemory(ctx context.Context) (float64, error) {
 }
 
 func logNormalResources(count int) {
-	log.WithField("replicaCount", count).Info("Recursos do AlloyDB dentro da normalidade")
+	log.Info().Int("replicaCount", count).Msg("Recursos do AlloyDB dentro da normalidade")
 }
 
 func scaleUp(ctx context.Context) error {
@@ -383,16 +371,16 @@ func scaleUp(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		log.WithField("novaQuantidade", newCount).Info("Iniciando operação de escala")
+		log.Info().Int("novaQuantidade", newCount).Msg("Iniciando operação de escala")
 
 		err = waitForOperation(ctx, operation)
 		if err != nil {
 			return fmt.Errorf("erro ao aguardar a conclusão da operação de escala: %w", err)
 		}
 
-		log.WithField("novaQuantidade", newCount).Info("Escalado com sucesso")
+		log.Info().Int("novaQuantidade", newCount).Msg("Escalado com sucesso")
 	} else {
-		log.Warn("O número máximo de réplicas foi atingido. Não serão criadas novas réplicas")
+		log.Warn().Msg("O número máximo de réplicas foi atingido. Não serão criadas novas réplicas")
 	}
 	return nil
 }
@@ -409,16 +397,16 @@ func scaleDown(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		log.WithField("novaQuantidade", newCount).Info("Iniciando operação de redução")
+		log.Info().Int("novaQuantidade", newCount).Msg("Iniciando operação de redução")
 
 		err = waitForOperation(ctx, operation)
 		if err != nil {
 			return fmt.Errorf("erro ao aguardar a conclusão da operação de redução: %w", err)
 		}
 
-		log.WithField("novaQuantidade", newCount).Info("Reduzido com sucesso")
+		log.Info().Int("novaQuantidade", newCount).Msg("Reduzido com sucesso")
 	} else {
-		log.Warn("O número mínimo de réplicas foi atingido. Não serão removidas réplicas")
+		log.Warn().Msg("O número mínimo de réplicas foi atingido. Não serão removidas réplicas")
 	}
 	return nil
 }
@@ -450,7 +438,7 @@ func waitForOperation(ctx context.Context, operation *alloydb.Operation) error {
 		return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
 	}
 
-	log.Info("Operação em andamento. Aguardando...")
+	log.Info().Msg("Operação em andamento. Aguardando...")
 
 	startTime := time.Now()
 	for {
@@ -463,7 +451,7 @@ func waitForOperation(ctx context.Context, operation *alloydb.Operation) error {
 			if op.Error != nil {
 				return fmt.Errorf("operação falhou: %s", op.Error.Message)
 			}
-			log.WithField("tempoTotal", time.Since(startTime).Round(time.Second)).Info("Operação concluída")
+			log.Info().Dur("tempoTotal", time.Since(startTime).Round(time.Second)).Msg("Operação concluída")
 			return nil
 		}
 
