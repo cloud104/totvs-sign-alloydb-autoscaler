@@ -6,19 +6,20 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
-	"github.com/cenkalti/backoff/v4"
 	"github.com/joho/godotenv"
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/alloydb/v1"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// Config armazena todas as configurações do aplicativo
 type Config struct {
 	GoogleApplicationCredentials string
 	MemoryMetric                 string
@@ -33,41 +34,25 @@ type Config struct {
 	Region                       string
 	MinReplicas                  int
 	MaxReplicas                  int
-	LogLevel                     string
-	APITimeout                   time.Duration
-}
-
-type Metrics struct {
-	MemoryUsage float64
-	CPUUsage    float64
+	TimeoutSeconds               int
+	LogLevel                     log.Level
 }
 
 var (
 	cfg Config
-	log = logrus.New()
 )
 
-const AppName = "AlloyDB Autoscaler"
-
 func init() {
+	// Configurar logrus
+	log.SetFormatter(&log.JSONFormatter{})
+	log.SetOutput(os.Stdout)
+
 	if err := loadConfig(); err != nil {
 		log.Fatal(err)
 	}
 
-	log.SetFormatter(&logrus.JSONFormatter{
-		TimestampFormat: "02/01/2006 15:04:05",
-		FieldMap: logrus.FieldMap{
-			logrus.FieldKeyTime:  "timestamp",
-			logrus.FieldKeyLevel: "level",
-			logrus.FieldKeyMsg:   "message",
-		},
-	})
-
-	level, err := logrus.ParseLevel(cfg.LogLevel)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.SetLevel(level)
+	// Definir o nível de log após carregar a configuração
+	log.SetLevel(cfg.LogLevel)
 }
 
 func loadConfig() error {
@@ -75,6 +60,7 @@ func loadConfig() error {
 		return fmt.Errorf("erro ao carregar arquivo .env: %w", err)
 	}
 
+	var err error
 	cfg = Config{
 		GoogleApplicationCredentials: os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"),
 		MemoryMetric:                 "alloydb.googleapis.com/instance/memory/min_available_memory",
@@ -83,31 +69,29 @@ func loadConfig() error {
 		ClusterName:                  os.Getenv("CLUSTER_NAME"),
 		InstanceName:                 os.Getenv("INSTANCE_NAME"),
 		Region:                       os.Getenv("REGION"),
-		LogLevel:                     os.Getenv("LOG_LEVEL"),
 	}
 
-	var err error
-	cfg.CPUThreshold, err = parseConfig[float64]("CPU_THRESHOLD")
+	cfg.CPUThreshold, err = parseFloatConfig("CPU_THRESHOLD")
 	if err != nil {
 		return err
 	}
 
-	cfg.MemoryThreshold, err = parseConfig[float64]("MEMORY_THRESHOLD")
+	cfg.MemoryThreshold, err = parseFloatConfig("MEMORY_THRESHOLD")
 	if err != nil {
 		return err
 	}
 
-	cfg.CheckInterval, err = parseConfig[int]("CHECK_INTERVAL")
+	cfg.CheckInterval, err = parseIntConfig("CHECK_INTERVAL")
 	if err != nil {
 		return err
 	}
 
-	cfg.Evaluation, err = parseConfig[int]("EVALUATION")
+	cfg.Evaluation, err = parseIntConfig("EVALUATION")
 	if err != nil {
 		return err
 	}
 
-	cfg.MinReplicas, err = parseConfig[int]("MIN_REPLICAS")
+	cfg.MinReplicas, err = parseIntConfig("MIN_REPLICAS")
 	if err != nil {
 		return err
 	}
@@ -115,7 +99,7 @@ func loadConfig() error {
 		return fmt.Errorf("MIN_REPLICAS deve ser pelo menos 1, valor atual: %d", cfg.MinReplicas)
 	}
 
-	cfg.MaxReplicas, err = parseConfig[int]("MAX_REPLICAS")
+	cfg.MaxReplicas, err = parseIntConfig("MAX_REPLICAS")
 	if err != nil {
 		return err
 	}
@@ -127,32 +111,70 @@ func loadConfig() error {
 		return fmt.Errorf("MIN_REPLICAS (%d) não pode ser maior que MAX_REPLICAS (%d)", cfg.MinReplicas, cfg.MaxReplicas)
 	}
 
-	apiTimeout, err := parseConfig[int]("API_TIMEOUT")
+	cfg.TimeoutSeconds, err = parseIntConfig("TIMEOUT_SECONDS")
 	if err != nil {
 		return err
 	}
-	cfg.APITimeout = time.Duration(apiTimeout) * time.Second
+	if cfg.TimeoutSeconds <= 0 {
+		return fmt.Errorf("TIMEOUT_SECONDS deve ser maior que 0, valor atual: %d", cfg.TimeoutSeconds)
+	}
+
+	// Carregar e configurar o nível de log
+	logLevelStr := os.Getenv("LOG_LEVEL")
+	if logLevelStr == "" {
+		logLevelStr = "info" // Nível padrão se não for especificado
+	}
+	logLevel, err := log.ParseLevel(strings.ToLower(logLevelStr))
+	if err != nil {
+		return fmt.Errorf("nível de log inválido '%s': %w", logLevelStr, err)
+	}
+	cfg.LogLevel = logLevel
+
+	log.WithFields(log.Fields{
+		"CPUThreshold":    cfg.CPUThreshold,
+		"MemoryThreshold": cfg.MemoryThreshold,
+		"CheckInterval":   cfg.CheckInterval,
+		"Evaluation":      cfg.Evaluation,
+		"MinReplicas":     cfg.MinReplicas,
+		"MaxReplicas":     cfg.MaxReplicas,
+		"TimeoutSeconds":  cfg.TimeoutSeconds,
+		"LogLevel":        cfg.LogLevel.String(),
+	}).Info("Configuração carregada com sucesso")
 
 	return nil
 }
 
-func parseConfig[T int | float64](key string) (T, error) {
+func parseFloatConfig(key string) (float64, error) {
 	value := os.Getenv(key)
 	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
-		return T(0), fmt.Errorf("revise %s: o valor '%s' é inválido. Certifique-se de que o valor seja um número válido sem letras ou caracteres especiais", key, value)
+		return 0, fmt.Errorf("revise %s: o valor '%s' é inválido. Certifique-se de que o valor seja um número válido sem letras ou caracteres especiais", key, value)
 	}
-	return T(parsed), nil
+	return parsed, nil
 }
 
+func parseIntConfig(key string) (int, error) {
+	value := os.Getenv(key)
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("revise %s: o valor '%s' é inválido. Certifique-se de que o valor seja um número inteiro válido sem letras ou caracteres especiais", key, value)
+	}
+	return parsed, nil
+}
+
+const AppName = "AlloyDB Autoscaler"
+
 func main() {
-	fmt.Println()
-	log.Infof("%s (%s): Iniciando o aplicativo...", AppName, runtime.Version())
+	log.WithFields(log.Fields{
+		"appName":  AppName,
+		"version":  runtime.Version(),
+		"logLevel": cfg.LogLevel.String(),
+	}).Info("Iniciando o aplicativo")
 
 	ctx := context.Background()
 	client, err := monitoring.NewMetricClient(ctx)
 	if err != nil {
-		log.Fatal(err)
+		log.WithError(err).Fatal("Falha ao criar cliente de métricas")
 	}
 	defer client.Close()
 
@@ -160,21 +182,37 @@ func main() {
 	evaluationStart := time.Now()
 
 	for {
-		if err := checkMetrics(ctx, client, &scaleUpCount, &scaleDownCount); err != nil {
-			log.Errorf("Erro ao verificar métricas: %v", err)
-		}
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.TimeoutSeconds)*time.Second)
+			defer cancel()
+
+			if err := checkMetrics(ctx, client, &scaleUpCount, &scaleDownCount); err != nil {
+				if ctx.Err() == context.DeadlineExceeded {
+					log.WithFields(log.Fields{
+						"timeout": cfg.TimeoutSeconds,
+						"error":   err,
+					}).Error("Timeout ao verificar métricas")
+				} else {
+					log.WithError(err).Error("Erro ao verificar métricas")
+				}
+			}
+		}()
 
 		if time.Since(evaluationStart) >= time.Duration(cfg.Evaluation)*time.Second {
 			if scaleUpCount > scaleDownCount && scaleUpCount > 0 {
-				if err := scaleReplicas(ctx, true); err != nil {
-					log.Errorf("Erro ao escalar: %v", err)
+				if err := scaleUp(context.Background()); err != nil {
+					log.WithError(err).Error("Falha ao escalar para cima")
+				} else {
+					log.Info("Operação de escala de réplicas concluída com sucesso")
 				}
 			} else if scaleDownCount > scaleUpCount && scaleDownCount > 0 {
-				if err := scaleReplicas(ctx, false); err != nil {
-					log.Errorf("Erro ao reduzir réplicas: %v", err)
+				if err := scaleDown(context.Background()); err != nil {
+					log.WithError(err).Error("Falha ao escalar para baixo")
+				} else {
+					log.Info("Operação de redução de réplicas concluída com sucesso")
 				}
 			} else {
-				log.Infof("Nenhuma ação de escala necessária.")
+				log.Info("Nenhuma ação de escala necessária")
 			}
 
 			scaleUpCount = 0
@@ -185,71 +223,21 @@ func main() {
 		logTimer(cfg.CheckInterval)
 	}
 }
-
-func retry(ctx context.Context, operation string, f func() error) error {
-	b := backoff.NewExponentialBackOff()
-	b.MaxElapsedTime = cfg.APITimeout
-
-	return backoff.RetryNotify(func() error {
-		select {
-		case <-ctx.Done():
-			log.Errorf("Timeout ocorreu durante a operação: %s", operation)
-			return ctx.Err()
-		default:
-			err := f()
-			if err != nil {
-				log.Warnf("Erro na operação %s: %v. Tentando novamente...", operation, err)
-			}
-			return err
-		}
-	}, b, func(err error, duration time.Duration) {
-		log.Infof("Retry acionado para a operação: %s. Próxima tentativa em %v", operation, duration)
-	})
-}
-
-func initAlloyDBClient(ctx context.Context) (*alloydb.Service, error) {
-	return alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
-}
-
-func getInstanceWithRetry(ctx context.Context) (*alloydb.Instance, error) {
-	var instance *alloydb.Instance
-	err := retry(ctx, "getInstanceWithRetry", func() error {
-		service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
-		if err != nil {
-			log.WithError(err).Error("Erro ao criar serviço AlloyDB")
-			return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
-		}
-
-		instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
-
-		instance, err = service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
-		if err != nil {
-			log.WithError(err).Error("Erro ao obter instância do AlloyDB")
-			return err
-		}
-
-		if ctx.Err() == context.DeadlineExceeded {
-			log.Error("Timeout ocorreu durante a obtenção da instância do AlloyDB")
-			return ctx.Err()
-		}
-
-		return nil
-	})
-
-	return instance, err
-}
-
 func logTimer(duration int) {
 	nextCheck := time.Now().Add(time.Duration(duration) * time.Second)
-	log.Debugf("Próxima checagem: %s", nextCheck.Format("15:04:05"))
+	log.WithField("proximaChecagem", nextCheck.Format("15:04:05")).Debug("Próxima checagem agendada")
 	time.Sleep(time.Duration(duration) * time.Second)
-	//fmt.Println()
 }
 
 func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpCount, scaleDownCount *int) error {
-	metrics, err := getMetrics(ctx, client)
+	memoryFreeBytes, err := queryMetric(ctx, client, cfg.MemoryMetric)
 	if err != nil {
-		return fmt.Errorf("erro ao obter métricas: %w", err)
+		return fmt.Errorf("erro ao consultar memória livre: %w", err)
+	}
+
+	cpuUsage, err := queryMetric(ctx, client, cfg.CPUMetric)
+	if err != nil {
+		return fmt.Errorf("erro ao consultar uso de CPU: %w", err)
 	}
 
 	totalMemoryGB, err := getTotalMemory(ctx)
@@ -257,11 +245,17 @@ func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 		return fmt.Errorf("erro ao obter memória total: %w", err)
 	}
 
-	memoryUsagePercent := (1 - metrics.MemoryUsage/totalMemoryGB) * 100
-	cpuUsagePercent := metrics.CPUUsage * 100
+	memoryFreeGB := memoryFreeBytes / (1024 * 1024 * 1024)
+	memoryUsedGB := totalMemoryGB - memoryFreeGB
+	memoryUsagePercent := (memoryUsedGB / totalMemoryGB) * 100
 
-	log.Debugf("Cluster: %s, Uso de CPU: %.2f%%, Uso de Memória: %.2f%%",
-		cfg.ClusterName, cpuUsagePercent, memoryUsagePercent)
+	cpuUsagePercent := cpuUsage * 100
+
+	log.WithFields(log.Fields{
+		"cluster":            cfg.ClusterName,
+		"cpuUsagePercent":    cpuUsagePercent,
+		"memoryUsagePercent": memoryUsagePercent,
+	}).Info("Métricas atuais")
 
 	currentCount, err := getReadPoolNodeCount(ctx)
 	if err != nil {
@@ -270,15 +264,21 @@ func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 
 	if memoryUsagePercent > cfg.MemoryThreshold || cpuUsagePercent > cfg.CPUThreshold {
 		if currentCount < cfg.MaxReplicas {
-			log.Infof("Recursos insuficientes detectados, considerando escalar réplicas.")
+			log.WithFields(log.Fields{
+				"cpuUsage":    cpuUsagePercent,
+				"memoryUsage": memoryUsagePercent,
+			}).Warn("Recursos insuficientes detectados, considerando escalar réplicas")
 			*scaleUpCount++
 			*scaleDownCount = 0
 		} else {
-			log.Debugf("Recursos insuficientes detectados, mas o número máximo de réplicas já foi atingido.")
+			log.Warn("Recursos insuficientes detectados, mas o número máximo de réplicas já foi atingido")
 		}
 	} else if memoryUsagePercent < cfg.MemoryThreshold && cpuUsagePercent < cfg.CPUThreshold {
 		if currentCount > cfg.MinReplicas {
-			log.Infof("Recursos em excesso detectados, considerando reduzir o número de réplicas.")
+			log.WithFields(log.Fields{
+				"cpuUsage":    cpuUsagePercent,
+				"memoryUsage": memoryUsagePercent,
+			}).Warn("Recursos em excesso detectados, considerando reduzir o número de réplicas")
 			*scaleDownCount++
 			*scaleUpCount = 0
 		} else {
@@ -293,153 +293,173 @@ func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 	return nil
 }
 
-func getMetrics(ctx context.Context, client *monitoring.MetricClient) (Metrics, error) {
-	memoryFreeBytes, err := queryMetric(ctx, client, cfg.MemoryMetric)
-	if err != nil {
-		return Metrics{}, fmt.Errorf("erro ao consultar memória livre: %w", err)
-	}
-
-	cpuUsage, err := queryMetric(ctx, client, cfg.CPUMetric)
-	if err != nil {
-		return Metrics{}, fmt.Errorf("erro ao consultar uso de CPU: %w", err)
-	}
-
-	return Metrics{
-		MemoryUsage: memoryFreeBytes / (1024 * 1024 * 1024),
-		CPUUsage:    cpuUsage,
-	}, nil
-}
-
 func queryMetric(ctx context.Context, client *monitoring.MetricClient, metricType string) (float64, error) {
+	now := time.Now()
+	startTime := now.Add(-5 * time.Minute)
+
+	req := &monitoringpb.ListTimeSeriesRequest{
+		Name:   fmt.Sprintf("projects/%s", cfg.GCPProject),
+		Filter: fmt.Sprintf(`metric.type = "%s" AND resource.labels.instance_id = "%s"`, metricType, cfg.InstanceName),
+		Interval: &monitoringpb.TimeInterval{
+			StartTime: timestamppb.New(startTime),
+			EndTime:   timestamppb.New(now),
+		},
+		View: monitoringpb.ListTimeSeriesRequest_FULL,
+	}
+
+	it := client.ListTimeSeries(ctx, req)
 	var lastValue float64
-	err := retry(ctx, "queryMetric", func() error {
-		now := time.Now()
-		startTime := now.Add(-5 * time.Minute)
-
-		req := &monitoringpb.ListTimeSeriesRequest{
-			Name:   fmt.Sprintf("projects/%s", cfg.GCPProject),
-			Filter: fmt.Sprintf(`metric.type = "%s" AND resource.labels.instance_id = "%s"`, metricType, cfg.InstanceName),
-			Interval: &monitoringpb.TimeInterval{
-				StartTime: timestamppb.New(startTime),
-				EndTime:   timestamppb.New(now),
-			},
-			View: monitoringpb.ListTimeSeriesRequest_FULL,
+	for {
+		resp, err := it.Next()
+		if err == iterator.Done {
+			break
 		}
-
-		it := client.ListTimeSeries(ctx, req)
-		for {
-			resp, err := it.Next()
-			if err == iterator.Done {
-				break
+		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				return 0, fmt.Errorf("timeout ao consultar métrica %s: %w", metricType, err)
 			}
-			if err != nil {
-				return fmt.Errorf("erro ao iterar sobre as séries temporais: %w", err)
-			}
-			if len(resp.Points) > 0 {
-				switch v := resp.Points[0].Value.Value.(type) {
-				case *monitoringpb.TypedValue_DoubleValue:
-					lastValue = v.DoubleValue
-				case *monitoringpb.TypedValue_Int64Value:
-					lastValue = float64(v.Int64Value)
-				default:
-					return fmt.Errorf("tipo de valor não suportado: %T", v)
-				}
+			return 0, fmt.Errorf("erro ao iterar sobre as séries temporais: %w", err)
+		}
+		if len(resp.Points) > 0 {
+			switch v := resp.Points[0].Value.Value.(type) {
+			case *monitoringpb.TypedValue_DoubleValue:
+				lastValue = v.DoubleValue
+			case *monitoringpb.TypedValue_Int64Value:
+				lastValue = float64(v.Int64Value)
+			default:
+				return 0, fmt.Errorf("tipo de valor não suportado: %T", v)
 			}
 		}
-		return nil
-	})
-	return lastValue, err
+	}
+
+	return lastValue, nil
 }
 
 func getReadPoolNodeCount(ctx context.Context) (int, error) {
-	instance, err := getInstanceWithRetry(ctx)
+	service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
 	}
+
+	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
+	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return 0, fmt.Errorf("timeout ao obter instância: %w", err)
+		}
+		return 0, fmt.Errorf("erro ao obter instância: %w", err)
+	}
+
 	return int(instance.ReadPoolConfig.NodeCount), nil
 }
 
 func getTotalMemory(ctx context.Context) (float64, error) {
-	instance, err := getInstanceWithRetry(ctx)
+	service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
 	}
-	return float64(instance.MachineConfig.CpuCount) * 8, nil
+
+	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
+	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return 0, fmt.Errorf("timeout ao obter instância para memória total: %w", err)
+		}
+		return 0, fmt.Errorf("erro ao obter instância para memória total: %w", err)
+	}
+
+	totalMemoryGB := float64(instance.MachineConfig.CpuCount) * 8
+
+	return totalMemoryGB, nil
 }
 
 func logNormalResources(count int) {
-	log.Infof("Recursos do AlloyDB dentro da normalidade com %d réplicas.", count)
+	log.WithField("replicaCount", count).Info("Recursos do AlloyDB dentro da normalidade")
 }
 
-func scaleReplicas(ctx context.Context, scaleUp bool) error {
+func scaleUp(ctx context.Context) error {
 	currentCount, err := getReadPoolNodeCount(ctx)
 	if err != nil {
 		return err
 	}
 
-	var newCount int
-	var action string
-	if scaleUp {
-		if currentCount >= cfg.MaxReplicas {
-			log.Infof("O número máximo de réplicas foi atingido. Não serão criadas novas réplicas.")
-			return nil
+	if currentCount < cfg.MaxReplicas {
+		newCount := currentCount + 1
+		operation, err := updateReplicaCount(ctx, newCount)
+		if err != nil {
+			return err
 		}
-		newCount = currentCount + 1
-		action = "escala"
-	} else {
-		if currentCount <= cfg.MinReplicas {
-			log.Infof("O número mínimo de réplicas foi atingido. Não serão removidas réplicas.")
-			return nil
-		}
-		newCount = currentCount - 1
-		action = "redução"
-	}
+		log.WithField("novaQuantidade", newCount).Info("Iniciando operação de escala")
 
-	operation, err := updateReplicaCount(ctx, newCount)
+		err = waitForOperation(ctx, operation)
+		if err != nil {
+			return fmt.Errorf("erro ao aguardar a conclusão da operação de escala: %w", err)
+		}
+
+		log.WithField("novaQuantidade", newCount).Info("Escalado com sucesso")
+	} else {
+		log.Warn("O número máximo de réplicas foi atingido. Não serão criadas novas réplicas")
+	}
+	return nil
+}
+
+func scaleDown(ctx context.Context) error {
+	currentCount, err := getReadPoolNodeCount(ctx)
 	if err != nil {
 		return err
 	}
-	log.Infof("Iniciando operação de %s para %d réplicas.", action, newCount)
 
-	err = waitForOperation(ctx, operation)
-	if err != nil {
-		return fmt.Errorf("erro ao aguardar a conclusão da operação de %s: %w", action, err)
+	if currentCount > cfg.MinReplicas {
+		newCount := currentCount - 1
+		operation, err := updateReplicaCount(ctx, newCount)
+		if err != nil {
+			return err
+		}
+		log.WithField("novaQuantidade", newCount).Info("Iniciando operação de redução")
+
+		err = waitForOperation(ctx, operation)
+		if err != nil {
+			return fmt.Errorf("erro ao aguardar a conclusão da operação de redução: %w", err)
+		}
+
+		log.WithField("novaQuantidade", newCount).Info("Reduzido com sucesso")
+	} else {
+		log.Warn("O número mínimo de réplicas foi atingido. Não serão removidas réplicas")
 	}
-
-	fmt.Println()
-	log.Infof("%s com sucesso para %d réplicas.", action, newCount)
 	return nil
 }
 
 func updateReplicaCount(ctx context.Context, count int) (*alloydb.Operation, error) {
-	var operation *alloydb.Operation
-	err := retry(ctx, "updateReplicaCount", func() error {
-		service, err := initAlloyDBClient(ctx)
-		if err != nil {
-			return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
-		}
-		instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
-		instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
-		if err != nil {
-			return fmt.Errorf("erro ao obter instância: %w", err)
-		}
+	service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
+	if err != nil {
+		return nil, fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
+	}
 
-		instance.ReadPoolConfig.NodeCount = int64(count)
-		operation, err = service.Projects.Locations.Clusters.Instances.Patch(instanceName, instance).Context(ctx).Do()
-		return err
-	})
-	return operation, err
+	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.GCPProject, cfg.Region, cfg.ClusterName, cfg.InstanceName)
+	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("erro ao obter instância: %w", err)
+	}
+
+	instance.ReadPoolConfig.NodeCount = int64(count)
+	operation, err := service.Projects.Locations.Clusters.Instances.Patch(instanceName, instance).Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("erro ao iniciar operação de atualização de réplicas: %w", err)
+	}
+
+	return operation, nil
 }
 
 func waitForOperation(ctx context.Context, operation *alloydb.Operation) error {
-	log.Infof("Operação em andamento. Aguardando...")
-	startTime := time.Now()
+	service, err := alloydb.NewService(ctx, option.WithCredentialsFile(cfg.GoogleApplicationCredentials))
+	if err != nil {
+		return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
+	}
 
-	return retry(ctx, "waitForOperation", func() error {
-		service, err := initAlloyDBClient(ctx)
-		if err != nil {
-			return fmt.Errorf("erro ao criar serviço AlloyDB: %w", err)
-		}
+	log.Info("Operação em andamento. Aguardando...")
+
+	startTime := time.Now()
+	for {
 		op, err := service.Projects.Locations.Operations.Get(operation.Name).Context(ctx).Do()
 		if err != nil {
 			return fmt.Errorf("erro ao obter status da operação: %w", err)
@@ -449,11 +469,10 @@ func waitForOperation(ctx context.Context, operation *alloydb.Operation) error {
 			if op.Error != nil {
 				return fmt.Errorf("operação falhou: %s", op.Error.Message)
 			}
-			log.Infof("Operação concluída. Tempo total: %v", time.Since(startTime).Round(time.Second))
+			log.WithField("tempoTotal", time.Since(startTime).Round(time.Second)).Info("Operação concluída")
 			return nil
 		}
 
-		fmt.Print(".")
-		return fmt.Errorf("operação ainda em andamento")
-	})
+		time.Sleep(10 * time.Second)
+	}
 }
