@@ -43,7 +43,6 @@ var (
 )
 
 func init() {
-	// Configurar logrus
 	log.SetFormatter(&log.JSONFormatter{})
 	log.SetOutput(os.Stdout)
 
@@ -51,7 +50,6 @@ func init() {
 		log.Fatal(err)
 	}
 
-	// Definir o nível de log após carregar a configuração
 	log.SetLevel(cfg.LogLevel)
 }
 
@@ -119,10 +117,9 @@ func loadConfig() error {
 		return fmt.Errorf("TIMEOUT_SECONDS deve ser maior que 0, valor atual: %d", cfg.TimeoutSeconds)
 	}
 
-	// Carregar e configurar o nível de log
 	logLevelStr := os.Getenv("LOG_LEVEL")
 	if logLevelStr == "" {
-		logLevelStr = "info" // Nível padrão se não for especificado
+		logLevelStr = "info"
 	}
 	logLevel, err := log.ParseLevel(strings.ToLower(logLevelStr))
 	if err != nil {
@@ -138,8 +135,7 @@ func loadConfig() error {
 		"MinReplicas":     cfg.MinReplicas,
 		"MaxReplicas":     cfg.MaxReplicas,
 		"TimeoutSeconds":  cfg.TimeoutSeconds,
-		"LogLevel":        cfg.LogLevel.String(),
-	}).Info("Configuração carregada com sucesso")
+	}).Debug("Configuração carregada com sucesso")
 
 	return nil
 }
@@ -166,9 +162,8 @@ const AppName = "AlloyDB Autoscaler"
 
 func main() {
 	log.WithFields(log.Fields{
-		"appName":  AppName,
-		"version":  runtime.Version(),
-		"logLevel": cfg.LogLevel.String(),
+		"appName": AppName,
+		"version": runtime.Version(),
 	}).Info("Iniciando o aplicativo")
 
 	ctx := context.Background()
@@ -188,10 +183,7 @@ func main() {
 
 			if err := checkMetrics(ctx, client, &scaleUpCount, &scaleDownCount); err != nil {
 				if ctx.Err() == context.DeadlineExceeded {
-					log.WithFields(log.Fields{
-						"timeout": cfg.TimeoutSeconds,
-						"error":   err,
-					}).Error("Timeout ao verificar métricas")
+					log.WithField("timeout", cfg.TimeoutSeconds).Error("Timeout ao verificar métricas")
 				} else {
 					log.WithError(err).Error("Erro ao verificar métricas")
 				}
@@ -201,13 +193,13 @@ func main() {
 		if time.Since(evaluationStart) >= time.Duration(cfg.Evaluation)*time.Second {
 			if scaleUpCount > scaleDownCount && scaleUpCount > 0 {
 				if err := scaleUp(context.Background()); err != nil {
-					log.WithError(err).Error("Falha ao escalar para cima")
+					log.WithError(err).Error("Falha ao escalar")
 				} else {
 					log.Info("Operação de escala de réplicas concluída com sucesso")
 				}
 			} else if scaleDownCount > scaleUpCount && scaleDownCount > 0 {
 				if err := scaleDown(context.Background()); err != nil {
-					log.WithError(err).Error("Falha ao escalar para baixo")
+					log.WithError(err).Error("Falha ao desescalar")
 				} else {
 					log.Info("Operação de redução de réplicas concluída com sucesso")
 				}
@@ -225,7 +217,7 @@ func main() {
 }
 func logTimer(duration int) {
 	nextCheck := time.Now().Add(time.Duration(duration) * time.Second)
-	log.WithField("proximaChecagem", nextCheck.Format("15:04:05")).Debug("Próxima checagem agendada")
+	log.Debugf("Proxima checagem %s", nextCheck.Format("15:04:05"))
 	time.Sleep(time.Duration(duration) * time.Second)
 }
 
@@ -252,10 +244,10 @@ func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 	cpuUsagePercent := cpuUsage * 100
 
 	log.WithFields(log.Fields{
-		"cluster":            cfg.ClusterName,
-		"cpuUsagePercent":    cpuUsagePercent,
-		"memoryUsagePercent": memoryUsagePercent,
-	}).Info("Métricas atuais")
+		"cluster":     cfg.ClusterName,
+		"cpuUsage":    fmt.Sprintf("%.2f%%", cpuUsagePercent),
+		"memoryUsage": fmt.Sprintf("%.2f%%", memoryUsagePercent),
+	}).Debug("Métricas atuais")
 
 	currentCount, err := getReadPoolNodeCount(ctx)
 	if err != nil {
@@ -265,20 +257,22 @@ func checkMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 	if memoryUsagePercent > cfg.MemoryThreshold || cpuUsagePercent > cfg.CPUThreshold {
 		if currentCount < cfg.MaxReplicas {
 			log.WithFields(log.Fields{
-				"cpuUsage":    cpuUsagePercent,
-				"memoryUsage": memoryUsagePercent,
-			}).Warn("Recursos insuficientes detectados, considerando escalar réplicas")
+				"cpuUsage":     cpuUsagePercent,
+				"memoryUsage":  memoryUsagePercent,
+				"currentCount": currentCount,
+			}).Info("Recursos insuficientes detectados, considerando escalar réplicas")
 			*scaleUpCount++
 			*scaleDownCount = 0
 		} else {
-			log.Warn("Recursos insuficientes detectados, mas o número máximo de réplicas já foi atingido")
+			log.WithField("currentCount", currentCount).Warn("Recursos insuficientes detectados, mas o número máximo de réplicas já foi atingido")
 		}
 	} else if memoryUsagePercent < cfg.MemoryThreshold && cpuUsagePercent < cfg.CPUThreshold {
 		if currentCount > cfg.MinReplicas {
 			log.WithFields(log.Fields{
-				"cpuUsage":    cpuUsagePercent,
-				"memoryUsage": memoryUsagePercent,
-			}).Warn("Recursos em excesso detectados, considerando reduzir o número de réplicas")
+				"cpuUsage":     cpuUsagePercent,
+				"memoryUsage":  memoryUsagePercent,
+				"currentCount": currentCount,
+			}).Info("Recursos em excesso detectados, considerando reduzir o número de réplicas")
 			*scaleDownCount++
 			*scaleUpCount = 0
 		} else {
