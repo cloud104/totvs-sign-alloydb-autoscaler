@@ -164,7 +164,7 @@ func main() {
 	log.WithFields(log.Fields{
 		"appName": AppName,
 		"version": runtime.Version(),
-	}).Info("Iniciando o aplicativo")
+	}).Debug("Iniciando o aplicativo")
 
 	ctx := context.Background()
 	client, err := monitoring.NewMetricClient(ctx)
