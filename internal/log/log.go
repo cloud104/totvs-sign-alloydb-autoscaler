@@ -3,6 +3,7 @@ package log
 import (
 	"flag"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -21,14 +22,27 @@ var (
 )
 
 func Initialize() {
-	loggingLevel := flag.String("logging_level", zerolog.InfoLevel.String(), "logging level [-logging_level=trace|debug|info|error] (default is info)")
-	loggingFormat := flag.String("logging_format", "json", "logging format [-logging_format=standard|json] (default is json)")
-	flag.Parse()
-
-	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
-
-	setLoggingFormat(*loggingFormat)
-	setLoggingLevel(*loggingLevel)
+	// Obter o nível de log da variável de ambiente
+	envLogLevel := os.Getenv("LOG_LEVEL")
+	
+	// Se não estiver definido, usar as flags de linha de comando
+	if envLogLevel == "" {
+		loggingLevel := flag.String("logging_level", zerolog.InfoLevel.String(), "logging level [-logging_level=trace|debug|info|error] (default is info)")
+		loggingFormat := flag.String("logging_format", "json", "logging format [-logging_format=standard|json] (default is json)")
+		flag.Parse()
+		
+		zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
+		
+		setLoggingFormat(*loggingFormat)
+		setLoggingLevel(*loggingLevel)
+	} else {
+		// Usar o nível de log da variável de ambiente
+		zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
+		
+		// Formato padrão JSON se não for especificado de outra forma
+		setLoggingFormat("json")
+		setLoggingLevel(envLogLevel)
+	}
 }
 
 func setLoggingFormat(loggingFormat string) {
@@ -48,7 +62,10 @@ func setLoggingFormat(loggingFormat string) {
 }
 
 func setLoggingLevel(loggingLevel string) {
-	level, ok := loggerLevel[loggingLevel]
+	// Converter para minúsculas para garantir compatibilidade
+	loggingLevelLower := strings.ToLower(loggingLevel)
+	
+	level, ok := loggerLevel[loggingLevelLower]
 	if ok {
 		zerolog.SetGlobalLevel(level)
 	} else {
