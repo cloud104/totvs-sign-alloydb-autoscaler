@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/heraque/alloydb-autoscaler/internal/config"
-	"github.com/heraque/alloydb-autoscaler/internal/log"
+	"github.com/heraque/alloydb-autoscaler/tree/main/internal/config"
+	"github.com/heraque/alloydb-autoscaler/tree/main/internal/log"
 	"google.golang.org/api/alloydb/v1"
 	"google.golang.org/api/option"
 )

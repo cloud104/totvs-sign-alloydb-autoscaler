@@ -1,4 +1,4 @@
-module github.com/heraque/alloydb-autoscaler
+module github.com/heraque/alloydb-autoscaler/tree/main
 
 go 1.22.5
 

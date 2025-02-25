@@ -8,9 +8,9 @@ import (
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
-	"github.com/heraque/alloydb-autoscaler/internal/alloydb"
-	"github.com/heraque/alloydb-autoscaler/internal/config"
-	"github.com/heraque/alloydb-autoscaler/internal/log"
+	"github.com/heraque/alloydb-autoscaler/tree/main/internal/alloydb"
+	"github.com/heraque/alloydb-autoscaler/tree/main/internal/config"
+	"github.com/heraque/alloydb-autoscaler/tree/main/internal/log"
 	"google.golang.org/api/iterator"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )

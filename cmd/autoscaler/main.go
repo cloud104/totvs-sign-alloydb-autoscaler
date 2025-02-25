@@ -7,10 +7,10 @@ import (
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
-	"github.com/heraque/alloydb-autoscaler/internal/config"
-	"github.com/heraque/alloydb-autoscaler/internal/log"
-	"github.com/heraque/alloydb-autoscaler/internal/metrics"
-	"github.com/heraque/alloydb-autoscaler/internal/scaling"
+	"github.com/heraque/alloydb-autoscaler/tree/main/internal/config"
+	"github.com/heraque/alloydb-autoscaler/tree/main/internal/log"
+	"github.com/heraque/alloydb-autoscaler/tree/main/internal/metrics"
+	"github.com/heraque/alloydb-autoscaler/tree/main/internal/scaling"
 )
 
 const AppName = "AlloyDB Autoscaler"
