@@ -64,3 +64,5 @@ To use the application with Docker, follow the steps below:
 3. Run the command `docker run -v ./.env:/app/.env -v ./key.json:/app/key.json alloydb-autoscaler && docker logs -f -t alloydb-autoscaler` to run the application and display the logs.
 
 **IMPORTANT**: The rule for scaling down only applies if the nodepoolcount is greater than 1. If there is only 1 node (the minimum), the program will only consider the possibility of scaling up
+
+**Docker builded image:**  `heraque/alloydb-autoscaler:latest`

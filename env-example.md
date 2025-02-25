@@ -1,4 +1,4 @@
-# Google Cloud Platform credentials
+#Google Cloud Platform credentials
 GOOGLE_APPLICATION_CREDENTIALS=key.json # Arquivo de credenciais da GCP
 GCP_PROJECT= # Nome do projeto
 CLUSTER_NAME= # Nome do cluster AlloyDB
