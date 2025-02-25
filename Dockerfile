@@ -11,7 +11,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -a -installsuffix cgo -o main ./cmd/autoscaler
 
 # Etapa final
-FROM alpine:3.15.11
+FROM alpine:3.21
 
 WORKDIR /app
 
