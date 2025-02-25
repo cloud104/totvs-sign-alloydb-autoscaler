@@ -1,4 +1,5 @@
-![AlloyDB Logo](https://miro.medium.com/v2/resize:fit:1400/1*X8fQjt3rQwXHc0lpnW7MXA.png)
+[![AlloyDB Logo](https://miro.medium.com/v2/resize:fit:1400/1*X8fQjt3rQwXHc0lpnW7MXA.png)](#---)
+
 
 # AlloyDB Autoscaler
 
