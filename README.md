@@ -43,8 +43,9 @@ O aplicativo funciona da seguinte maneira:
 --------------
 
 1. Clone o repositório do aplicativo
-2. Execute o comando `go build` para compilar o aplicativo
-3. Execute o comando `go run` para executar o aplicativo
+2. Execute o comando `go mod tidy` para baixar as dependências do aplicativo.
+3. Execute o comando `go build` para compilar o aplicativo
+4. Execute o comando `go run` para executar o aplicativo
 
 ## Exemplos de Uso
 --------------------
