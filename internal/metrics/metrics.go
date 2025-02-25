@@ -8,9 +8,9 @@ import (
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/alloydb"
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/config"
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/log"
+	"github.com/heraque/alloydb-autoscaler/internal/alloydb"
+	"github.com/heraque/alloydb-autoscaler/internal/config"
+	"github.com/heraque/alloydb-autoscaler/internal/log"
 	"google.golang.org/api/iterator"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -18,7 +18,7 @@ import (
 // CheckMetrics checks AlloyDB metrics and updates scaling counters
 func CheckMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpCount, scaleDownCount *int) error {
 	startTime := time.Now()
-	
+
 	memoryFreeBytes, err := QueryMetric(ctx, client, config.Get().MemoryMetric)
 	if err != nil {
 		return fmt.Errorf("error querying free memory: %w", err)
@@ -69,7 +69,7 @@ func CheckMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 				Str("memoryThreshold", fmt.Sprintf("%.2f%%", config.Get().MemoryThreshold)).
 				Int("currentReplicas", currentCount).
 				Int("maxReplicas", config.Get().MaxReplicas).
-				Int("scaleUpVotes", *scaleUpCount + 1).
+				Int("scaleUpVotes", *scaleUpCount+1).
 				Msg("Insufficient resources detected, considering scaling up")
 			*scaleUpCount++
 			*scaleDownCount = 0
@@ -94,7 +94,7 @@ func CheckMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 				Str("memoryThreshold", fmt.Sprintf("%.2f%%", config.Get().MemoryThreshold)).
 				Int("currentReplicas", currentCount).
 				Int("minReplicas", config.Get().MinReplicas).
-				Int("scaleDownVotes", *scaleDownCount + 1).
+				Int("scaleDownVotes", *scaleDownCount+1).
 				Msg("Excess resources detected, considering scaling down")
 			*scaleDownCount++
 			*scaleUpCount = 0

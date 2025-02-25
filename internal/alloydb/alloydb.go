@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/config"
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/log"
+	"github.com/heraque/alloydb-autoscaler/internal/config"
+	"github.com/heraque/alloydb-autoscaler/internal/log"
 	"google.golang.org/api/alloydb/v1"
 	"google.golang.org/api/option"
 )
@@ -18,10 +18,10 @@ func GetReadPoolNodeCount(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("error creating AlloyDB service: %w", err)
 	}
 
-	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", 
-		config.Get().GCPProject, 
-		config.Get().Region, 
-		config.Get().ClusterName, 
+	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s",
+		config.Get().GCPProject,
+		config.Get().Region,
+		config.Get().ClusterName,
 		config.Get().InstanceName)
 	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
 	if err != nil {
@@ -41,10 +41,10 @@ func GetTotalMemory(ctx context.Context) (float64, error) {
 		return 0, fmt.Errorf("error creating AlloyDB service: %w", err)
 	}
 
-	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", 
-		config.Get().GCPProject, 
-		config.Get().Region, 
-		config.Get().ClusterName, 
+	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s",
+		config.Get().GCPProject,
+		config.Get().Region,
+		config.Get().ClusterName,
 		config.Get().InstanceName)
 	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
 	if err != nil {
@@ -66,10 +66,10 @@ func UpdateReplicaCount(ctx context.Context, count int) (*alloydb.Operation, err
 		return nil, fmt.Errorf("error creating AlloyDB service: %w", err)
 	}
 
-	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", 
-		config.Get().GCPProject, 
-		config.Get().Region, 
-		config.Get().ClusterName, 
+	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s",
+		config.Get().GCPProject,
+		config.Get().Region,
+		config.Get().ClusterName,
 		config.Get().InstanceName)
 	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
 	if err != nil {

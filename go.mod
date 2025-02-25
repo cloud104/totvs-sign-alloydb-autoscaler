@@ -1,4 +1,4 @@
-module dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler
+module github.com/heraque/alloydb-autoscaler
 
 go 1.22.5
 
@@ -6,7 +6,6 @@ require (
 	cloud.google.com/go/monitoring v1.20.2
 	github.com/joho/godotenv v1.5.1
 	github.com/rs/zerolog v1.33.0
-	github.com/segmentio/encoding v0.4.1
 	google.golang.org/api v0.189.0
 	google.golang.org/protobuf v1.34.2
 )
@@ -28,7 +27,6 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/stretchr/testify v1.9.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.49.0 // indirect

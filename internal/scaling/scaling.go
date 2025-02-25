@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"time"
 
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/alloydb"
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/config"
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/log"
+	"github.com/heraque/alloydb-autoscaler/internal/alloydb"
+	"github.com/heraque/alloydb-autoscaler/internal/config"
+	"github.com/heraque/alloydb-autoscaler/internal/log"
 )
 
 // ScaleUp aumenta o número de réplicas em 1, se possível
 func ScaleUp(ctx context.Context) error {
 	startTime := time.Now()
-	
+
 	currentCount, err := alloydb.GetReadPoolNodeCount(ctx)
 	if err != nil {
 		return err
@@ -21,7 +21,7 @@ func ScaleUp(ctx context.Context) error {
 
 	if currentCount < config.Get().MaxReplicas {
 		newCount := currentCount + 1
-		
+
 		log.Info().
 			Str("component", "scaling").
 			Str("action", "scaleUp").
@@ -30,7 +30,7 @@ func ScaleUp(ctx context.Context) error {
 			Int("targetReplicas", newCount).
 			Int("maxReplicas", config.Get().MaxReplicas).
 			Msg("Initiating scale up operation")
-			
+
 		operation, err := alloydb.UpdateReplicaCount(ctx, newCount)
 		if err != nil {
 			return err
@@ -63,7 +63,7 @@ func ScaleUp(ctx context.Context) error {
 // ScaleDown diminui o número de réplicas em 1, se possível
 func ScaleDown(ctx context.Context) error {
 	startTime := time.Now()
-	
+
 	currentCount, err := alloydb.GetReadPoolNodeCount(ctx)
 	if err != nil {
 		return err
@@ -71,7 +71,7 @@ func ScaleDown(ctx context.Context) error {
 
 	if currentCount > config.Get().MinReplicas {
 		newCount := currentCount - 1
-		
+
 		log.Info().
 			Str("component", "scaling").
 			Str("action", "scaleDown").
@@ -80,7 +80,7 @@ func ScaleDown(ctx context.Context) error {
 			Int("targetReplicas", newCount).
 			Int("minReplicas", config.Get().MinReplicas).
 			Msg("Initiating scale down operation")
-			
+
 		operation, err := alloydb.UpdateReplicaCount(ctx, newCount)
 		if err != nil {
 			return err

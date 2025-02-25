@@ -7,10 +7,10 @@ import (
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/config"
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/log"
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/metrics"
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/scaling"
+	"github.com/heraque/alloydb-autoscaler/internal/config"
+	"github.com/heraque/alloydb-autoscaler/internal/log"
+	"github.com/heraque/alloydb-autoscaler/internal/metrics"
+	"github.com/heraque/alloydb-autoscaler/internal/scaling"
 )
 
 const AppName = "AlloyDB Autoscaler"
@@ -41,7 +41,7 @@ func main() {
 	for {
 		cycleCount++
 		cycleStartTime := time.Now()
-		
+
 		func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.Get().TimeoutSeconds)*time.Second)
 			defer cancel()
@@ -68,7 +68,7 @@ func main() {
 						Msg("Error checking metrics")
 				}
 			}
-			
+
 			log.Debug().
 				Str("component", "app").
 				Str("action", "check").
@@ -86,7 +86,7 @@ func main() {
 				Int("scaleDownVotes", scaleDownCount).
 				Str("evaluationPeriod", fmt.Sprintf("%.2fs", evalElapsed.Seconds())).
 				Msg("Making scaling decision")
-				
+
 			if scaleUpCount > scaleDownCount && scaleUpCount > 0 {
 				if err := scaling.ScaleUp(context.Background()); err != nil {
 					log.Error(err).

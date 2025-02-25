@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"sync"
 
-	"dev.azure.com/totvstfs/TOTVSApps-Infrastructure/_git/alloydb-autoscaler/internal/log"
+	"github.com/heraque/alloydb-autoscaler/internal/log"
 	"github.com/joho/godotenv"
 )
 
@@ -57,20 +57,20 @@ func Load() error {
 }
 
 func loadConfig() error {
-    // Tenta carregar o .env, mas não falha se não existir
-    _ = godotenv.Load("/app/.env")
+	// Tenta carregar o .env, mas não falha se não existir
+	_ = godotenv.Load("/app/.env")
 
-    var err error
-    cfg = Config{
-        GoogleApplicationCredentials: os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"),
-        MemoryMetric:                 "alloydb.googleapis.com/instance/memory/min_available_memory",
-        CPUMetric:                    "alloydb.googleapis.com/instance/cpu/average_utilization",
-        GCPProject:                   os.Getenv("GCP_PROJECT"),
-        ClusterName:                  os.Getenv("CLUSTER_NAME"),
-        InstanceName:                 os.Getenv("INSTANCE_NAME"),
-        Region:                       os.Getenv("REGION"),
-        LogLevel:                     os.Getenv("LOG_LEVEL"),
-    }
+	var err error
+	cfg = Config{
+		GoogleApplicationCredentials: os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"),
+		MemoryMetric:                 "alloydb.googleapis.com/instance/memory/min_available_memory",
+		CPUMetric:                    "alloydb.googleapis.com/instance/cpu/average_utilization",
+		GCPProject:                   os.Getenv("GCP_PROJECT"),
+		ClusterName:                  os.Getenv("CLUSTER_NAME"),
+		InstanceName:                 os.Getenv("INSTANCE_NAME"),
+		Region:                       os.Getenv("REGION"),
+		LogLevel:                     os.Getenv("LOG_LEVEL"),
+	}
 
 	cfg.CPUThreshold, err = parseFloatConfig("CPU_THRESHOLD")
 	if err != nil {
