@@ -65,4 +65,20 @@ To use the application with Docker, follow the steps below:
 
 **IMPORTANT**: The rule for scaling down only applies if the nodepoolcount is greater than 1. If there is only 1 node (the minimum), the program will only consider the possibility of scaling up
 
+
+Permitions needed for Service Account:
+
+- `alloydb.clusters.get`
+- `alloydb.clusters.list`
+- `alloydb.instances.get`
+- `alloydb.instances.list`
+- `alloydb.instances.update`
+- `alloydb.locations.get`
+- `alloydb.locations.list`
+- `alloydb.operations.get`
+- `alloydb.operations.list`
+- `alloydb.users.get`
+- `alloydb.users.list`
+- `monitoring.timeSeries.list`
+
 **Docker builded image:**  `heraque/alloydb-autoscaler:latest`
