@@ -4,7 +4,13 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versão para a release (ex: 1.0.0)'
+        required: false
 
 jobs:
   build-and-push:
@@ -13,6 +19,23 @@ jobs:
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Determinar versão
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.version }}" != "" ]]; then
+            # Usar versão fornecida manualmente
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # Extrair versão da tag
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            # Gerar versão baseada na data e hash do commit
+            VERSION="$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          fi
       
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -28,4 +51,18 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ vars.DOCKER_USERNAME }}/alloydb-autoscaler:latest
+          tags: |
+            ${{ vars.DOCKER_USERNAME }}/alloydb-autoscaler:latest
+            ${{ vars.DOCKER_USERNAME }}/alloydb-autoscaler:${{ steps.version.outputs.VERSION }}
+      
+      - name: Criar Release no GitHub
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release v${{ steps.version.outputs.VERSION }}
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
