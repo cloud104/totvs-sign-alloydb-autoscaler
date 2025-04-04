@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Versão para a release (ex: 1.0.0)'
+        description: 'Versão para a imagem Docker (ex: 1.0.0)'
         required: false
 
 jobs:
@@ -54,15 +54,3 @@ jobs:
           tags: |
             ${{ vars.DOCKER_USERNAME }}/alloydb-autoscaler:latest
             ${{ vars.DOCKER_USERNAME }}/alloydb-autoscaler:${{ steps.version.outputs.VERSION }}
-      
-      - name: Criar Release no GitHub
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v1
-        with:
-          name: Release v${{ steps.version.outputs.VERSION }}
-          tag_name: v${{ steps.version.outputs.VERSION }}
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
