@@ -28,13 +28,14 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.version }}" != "" ]]; then
             # Usar versão fornecida manualmente
             echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "CREATE_VERSION_TAG=true" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             # Extrair versão da tag
             echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            echo "CREATE_VERSION_TAG=true" >> $GITHUB_OUTPUT
           else
-            # Gerar versão baseada na data e hash do commit
-            VERSION="$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
-            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+            # Para pushes regulares, não criar tag de versão
+            echo "CREATE_VERSION_TAG=false" >> $GITHUB_OUTPUT
           fi
       
       - name: Login to Docker Hub
@@ -46,7 +47,8 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
-      - name: Build e Push da imagem
+      - name: Build e Push da imagem (com tag de versão)
+        if: steps.version.outputs.CREATE_VERSION_TAG == 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -54,3 +56,12 @@ jobs:
           tags: |
             ${{ vars.DOCKER_USERNAME }}/alloydb-autoscaler:latest
             ${{ vars.DOCKER_USERNAME }}/alloydb-autoscaler:${{ steps.version.outputs.VERSION }}
+      
+      - name: Build e Push da imagem (apenas latest)
+        if: steps.version.outputs.CREATE_VERSION_TAG != 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ vars.DOCKER_USERNAME }}/alloydb-autoscaler:latest
