@@ -7,10 +7,10 @@ import (
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/config"
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/log"
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/metrics"
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/scaling"
+	"github.com/heraque/alloydb-autoscaler/internal/config"
+	"github.com/heraque/alloydb-autoscaler/internal/log"
+	"github.com/heraque/alloydb-autoscaler/internal/metrics"
+	"github.com/heraque/alloydb-autoscaler/internal/scaling"
 )
 
 const AppName = "AlloyDB Autoscaler"
@@ -38,12 +38,13 @@ func main() {
 	evaluationStart := time.Now()
 	cycleCount := 0
 
+	baseCtx := context.Background()
 	for {
 		cycleCount++
 		cycleStartTime := time.Now()
 
 		func() {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.Get().TimeoutSeconds)*time.Second)
+			ctx, cancel := context.WithTimeout(baseCtx, time.Duration(config.Get().TimeoutSeconds)*time.Second)
 			defer cancel()
 
 			log.Debug().
@@ -52,7 +53,8 @@ func main() {
 				Int("cycle", cycleCount).
 				Msg("Starting metrics check cycle")
 
-			if err := metrics.CheckMetrics(ctx, client, &scaleUpCount, &scaleDownCount); err != nil {
+			newScaleUpCount, newScaleDownCount, err := metrics.CheckMetrics(ctx, client, scaleUpCount, scaleDownCount)
+			if err != nil {
 				if ctx.Err() == context.DeadlineExceeded {
 					log.ErrorMessage("Metrics check timeout").
 						Str("component", "app").
@@ -67,6 +69,9 @@ func main() {
 						Int("cycle", cycleCount).
 						Msg("Error checking metrics")
 				}
+			} else {
+				scaleUpCount = newScaleUpCount
+				scaleDownCount = newScaleDownCount
 			}
 
 			log.Debug().

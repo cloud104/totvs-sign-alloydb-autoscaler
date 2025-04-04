@@ -8,30 +8,30 @@ import (
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/alloydb"
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/config"
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/log"
+	"github.com/heraque/alloydb-autoscaler/internal/alloydb"
+	"github.com/heraque/alloydb-autoscaler/internal/config"
+	"github.com/heraque/alloydb-autoscaler/internal/log"
 	"google.golang.org/api/iterator"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // CheckMetrics checks AlloyDB metrics and updates scaling counters
-func CheckMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpCount, scaleDownCount *int) error {
+func CheckMetrics(ctx context.Context, client *monitoring.MetricClient, currentScaleUpCount, currentScaleDownCount int) (int, int, error) {
 	startTime := time.Now()
 
 	memoryFreeBytes, err := QueryMetric(ctx, client, config.Get().MemoryMetric)
 	if err != nil {
-		return fmt.Errorf("error querying free memory: %w", err)
+		return 0, 0, fmt.Errorf("error querying free memory: %w", err)
 	}
 
 	cpuUsage, err := QueryMetric(ctx, client, config.Get().CPUMetric)
 	if err != nil {
-		return fmt.Errorf("error querying CPU usage: %w", err)
+		return 0, 0, fmt.Errorf("error querying CPU usage: %w", err)
 	}
 
 	totalMemoryGB, err := alloydb.GetTotalMemory(ctx)
 	if err != nil {
-		return fmt.Errorf("error getting total memory: %w", err)
+		return 0, 0, fmt.Errorf("error getting total memory: %w", err)
 	}
 
 	memoryFreeGB := memoryFreeBytes / (1024 * 1024 * 1024)
@@ -45,7 +45,7 @@ func CheckMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 		Str("action", "collect").
 		Str("instance", config.Get().InstanceName).
 		Str("cluster", config.Get().ClusterName).
-		Str("cpuUsage", fmt.Sprintf("%.2f%%", math.Round(cpuUsagePercent*100)/100)).
+		Float64("cpuUsage", math.Round(cpuUsagePercent*100)/100).
 		Str("memoryUsage", fmt.Sprintf("%.2f%%", math.Round(memoryUsagePercent*100)/100)).
 		Str("cpuThreshold", fmt.Sprintf("%.2f%%", config.Get().CPUThreshold)).
 		Str("memoryThreshold", fmt.Sprintf("%.2f%%", config.Get().MemoryThreshold)).
@@ -54,8 +54,11 @@ func CheckMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 
 	currentCount, err := alloydb.GetReadPoolNodeCount(ctx)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
+
+	newScaleUpCount := currentScaleUpCount
+	newScaleDownCount := currentScaleDownCount
 
 	if memoryUsagePercent > config.Get().MemoryThreshold || cpuUsagePercent > config.Get().CPUThreshold {
 		if currentCount < config.Get().MaxReplicas {
@@ -63,16 +66,16 @@ func CheckMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 				Str("component", "scaling").
 				Str("action", "evaluate").
 				Str("instance", config.Get().InstanceName).
-				Str("cpuUsage", fmt.Sprintf("%.2f%%", math.Round(cpuUsagePercent*100)/100)).
+				Float64("cpuUsage", math.Round(cpuUsagePercent*100)/100).
 				Str("memoryUsage", fmt.Sprintf("%.2f%%", math.Round(memoryUsagePercent*100)/100)).
 				Str("cpuThreshold", fmt.Sprintf("%.2f%%", config.Get().CPUThreshold)).
 				Str("memoryThreshold", fmt.Sprintf("%.2f%%", config.Get().MemoryThreshold)).
 				Int("currentReplicas", currentCount).
 				Int("maxReplicas", config.Get().MaxReplicas).
-				Int("scaleUpVotes", *scaleUpCount+1).
+				Int("scaleUpVotes", newScaleUpCount+1).
 				Msg("Insufficient resources detected, considering scaling up")
-			*scaleUpCount++
-			*scaleDownCount = 0
+			newScaleUpCount++
+			newScaleDownCount = 0
 		} else {
 			log.Warn().
 				Str("component", "scaling").
@@ -82,32 +85,28 @@ func CheckMetrics(ctx context.Context, client *monitoring.MetricClient, scaleUpC
 				Int("maxReplicas", config.Get().MaxReplicas).
 				Msg("Insufficient resources detected, but maximum replicas limit reached")
 		}
-	} else if memoryUsagePercent < config.Get().MemoryThreshold && cpuUsagePercent < config.Get().CPUThreshold {
-		if currentCount > config.Get().MinReplicas {
-			log.Info().
-				Str("component", "scaling").
-				Str("action", "evaluate").
-				Str("instance", config.Get().InstanceName).
-				Str("cpuUsage", fmt.Sprintf("%.2f%%", math.Round(cpuUsagePercent*100)/100)).
-				Str("memoryUsage", fmt.Sprintf("%.2f%%", math.Round(memoryUsagePercent*100)/100)).
-				Str("cpuThreshold", fmt.Sprintf("%.2f%%", config.Get().CPUThreshold)).
-				Str("memoryThreshold", fmt.Sprintf("%.2f%%", config.Get().MemoryThreshold)).
-				Int("currentReplicas", currentCount).
-				Int("minReplicas", config.Get().MinReplicas).
-				Int("scaleDownVotes", *scaleDownCount+1).
-				Msg("Excess resources detected, considering scaling down")
-			*scaleDownCount++
-			*scaleUpCount = 0
-		} else {
-			LogNormalResources(currentCount)
-		}
+	} else if currentCount > config.Get().MinReplicas {
+		log.Info().
+			Str("component", "scaling").
+			Str("action", "evaluate").
+			Str("instance", config.Get().InstanceName).
+			Float64("cpuUsage", math.Round(cpuUsagePercent*100)/100).
+			Str("memoryUsage", fmt.Sprintf("%.2f%%", math.Round(memoryUsagePercent*100)/100)).
+			Str("cpuThreshold", fmt.Sprintf("%.2f%%", config.Get().CPUThreshold)).
+			Str("memoryThreshold", fmt.Sprintf("%.2f%%", config.Get().MemoryThreshold)).
+			Int("currentReplicas", currentCount).
+			Int("minReplicas", config.Get().MinReplicas).
+			Int("scaleDownVotes", newScaleDownCount+1).
+			Msg("Excess resources detected, considering scaling down")
+		newScaleDownCount++
+		newScaleUpCount = 0
 	} else {
 		LogNormalResources(currentCount)
-		*scaleUpCount = 0
-		*scaleDownCount = 0
+		newScaleUpCount = 0
+		newScaleDownCount = 0
 	}
 
-	return nil
+	return newScaleUpCount, newScaleDownCount, nil
 }
 
 // QueryMetric queries a specific metric from Cloud Monitoring

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/alloydb"
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/config"
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/log"
+	"github.com/heraque/alloydb-autoscaler/internal/alloydb"
+	"github.com/heraque/alloydb-autoscaler/internal/config"
+	"github.com/heraque/alloydb-autoscaler/internal/log"
 )
 
 // ScaleUp aumenta o número de réplicas em 1, se possível

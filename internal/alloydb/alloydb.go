@@ -5,11 +5,33 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/config"
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/log"
+	"github.com/heraque/alloydb-autoscaler/internal/config"
+	"github.com/heraque/alloydb-autoscaler/internal/log"
 	"google.golang.org/api/alloydb/v1"
 	"google.golang.org/api/option"
 )
+
+// getInstanceName retorna o nome completo da instância no formato GCP
+func getInstanceName() string {
+	return fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s",
+		config.Get().GCPProject,
+		config.Get().Region,
+		config.Get().ClusterName,
+		config.Get().InstanceName)
+}
+
+// createAlloyDBService cria e retorna um cliente de serviço AlloyDB
+func createAlloyDBService(ctx context.Context) (*alloydb.Service, error) {
+	return alloydb.NewService(ctx, option.WithCredentialsFile(config.Get().GoogleApplicationCredentials))
+}
+
+// handleError processa erros comuns, incluindo timeouts
+func handleError(ctx context.Context, err error, operation string) error {
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("timeout %s: %w", operation, err)
+	}
+	return fmt.Errorf("error %s: %w", operation, err)
+}
 
 // GetReadPoolNodeCount returns the current number of nodes in the read pool
 func GetReadPoolNodeCount(ctx context.Context) (int, error) {
@@ -18,11 +40,7 @@ func GetReadPoolNodeCount(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("error creating AlloyDB service: %w", err)
 	}
 
-	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s",
-		config.Get().GCPProject,
-		config.Get().Region,
-		config.Get().ClusterName,
-		config.Get().InstanceName)
+	instanceName := getInstanceName()
 	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -41,11 +59,7 @@ func GetTotalMemory(ctx context.Context) (float64, error) {
 		return 0, fmt.Errorf("error creating AlloyDB service: %w", err)
 	}
 
-	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s",
-		config.Get().GCPProject,
-		config.Get().Region,
-		config.Get().ClusterName,
-		config.Get().InstanceName)
+	instanceName := getInstanceName()
 	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -66,11 +80,7 @@ func UpdateReplicaCount(ctx context.Context, count int) (*alloydb.Operation, err
 		return nil, fmt.Errorf("error creating AlloyDB service: %w", err)
 	}
 
-	instanceName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s",
-		config.Get().GCPProject,
-		config.Get().Region,
-		config.Get().ClusterName,
-		config.Get().InstanceName)
+	instanceName := getInstanceName()
 	instance, err := service.Projects.Locations.Clusters.Instances.Get(instanceName).Context(ctx).Do()
 	if err != nil {
 		return nil, fmt.Errorf("error getting instance: %w", err)

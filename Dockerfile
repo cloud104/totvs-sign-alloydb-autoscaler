@@ -4,7 +4,7 @@ FROM golang:alpine3.21 AS build
 WORKDIR /app
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download && go mod tidy
 
 COPY . .
 # Compilação estática apontando para o novo caminho do main.go

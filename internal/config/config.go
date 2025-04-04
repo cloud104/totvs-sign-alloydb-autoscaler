@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/heraque/alloydb-autoscaler/tree/main/internal/log"
+	"github.com/heraque/alloydb-autoscaler/internal/log"
 	"github.com/joho/godotenv"
 )
 
